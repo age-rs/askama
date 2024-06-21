@@ -40,6 +40,9 @@ const URLENCODE_STRICT_SET: &AsciiSet = &NON_ALPHANUMERIC
 // Same as URLENCODE_STRICT_SET, but preserves forward slashes for encoding paths
 const URLENCODE_SET: &AsciiSet = &URLENCODE_STRICT_SET.remove(b'/');
 
+// MAX_LEN is maximum allowed length for filters.
+const MAX_LEN: usize = 10_000;
+
 /// Marks a string (or other `Display` type) as safe
 ///
 /// Use this is you want to allow markup in an expression, or if you know
@@ -332,6 +335,11 @@ impl<S: fmt::Display> fmt::Display for TruncateFilter<S> {
                         while !s.is_char_boundary(rem) {
                             rem += 1;
                         }
+                        if rem == s.len() {
+                            // Don't write "..." if the char bound extends to the end of string.
+                            self.remaining = 0;
+                            return dest.write_str(s);
+                        }
                         dest.write_str(&s[..rem])?;
                     }
                     dest.write_str("...")?;
@@ -369,6 +377,9 @@ impl<S: fmt::Display> fmt::Display for TruncateFilter<S> {
 #[inline]
 pub fn indent(s: impl ToString, width: usize) -> Result<impl fmt::Display, Infallible> {
     fn indent(s: String, width: usize) -> Result<String, Infallible> {
+        if width >= MAX_LEN || s.len() >= MAX_LEN {
+            return Ok(s);
+        }
         let mut indented = String::new();
         for (i, c) in s.char_indices() {
             indented.push(c);
@@ -475,31 +486,23 @@ pub fn capitalize(s: impl ToString) -> Result<impl fmt::Display, Infallible> {
 
 /// Centers the value in a field of a given width
 #[inline]
-pub fn center(src: impl ToString, dst_len: usize) -> Result<impl fmt::Display, Infallible> {
-    fn center(src: String, dst_len: usize) -> Result<String, Infallible> {
-        let len = src.len();
-        if dst_len <= len {
-            Ok(src)
+pub fn center(src: impl fmt::Display, width: usize) -> Result<impl fmt::Display, Infallible> {
+    Ok(Center { src, width })
+}
+
+struct Center<T> {
+    src: T,
+    width: usize,
+}
+
+impl<T: fmt::Display> fmt::Display for Center<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.width < MAX_LEN {
+            write!(f, "{: ^1$}", self.src, self.width)
         } else {
-            let diff = dst_len - len;
-            let mid = diff / 2;
-            let r = diff % 2;
-            let mut buf = String::with_capacity(dst_len);
-
-            for _ in 0..mid {
-                buf.push(' ');
-            }
-
-            buf.push_str(&src);
-
-            for _ in 0..mid + r {
-                buf.push(' ');
-            }
-
-            Ok(buf)
+            write!(f, "{}", self.src)
         }
     }
-    center(src.to_string(), dst_len)
 }
 
 /// Count the words in that string.
@@ -670,7 +673,8 @@ mod tests {
         assert_eq!(truncate("您好", 1).unwrap().to_string(), "您...");
         assert_eq!(truncate("您好", 2).unwrap().to_string(), "您...");
         assert_eq!(truncate("您好", 3).unwrap().to_string(), "您...");
-        assert_eq!(truncate("您好", 4).unwrap().to_string(), "您好...");
+        assert_eq!(truncate("您好", 4).unwrap().to_string(), "您好");
+        assert_eq!(truncate("您好", 5).unwrap().to_string(), "您好");
         assert_eq!(truncate("您好", 6).unwrap().to_string(), "您好");
         assert_eq!(truncate("您好", 7).unwrap().to_string(), "您好");
         let s = String::from("🤚a🤚");
@@ -681,7 +685,10 @@ mod tests {
         assert_eq!(truncate("🤚a🤚", 3).unwrap().to_string(), "🤚...");
         assert_eq!(truncate("🤚a🤚", 4).unwrap().to_string(), "🤚...");
         assert_eq!(truncate("🤚a🤚", 5).unwrap().to_string(), "🤚a...");
-        assert_eq!(truncate("🤚a🤚", 6).unwrap().to_string(), "🤚a🤚...");
+        assert_eq!(truncate("🤚a🤚", 6).unwrap().to_string(), "🤚a🤚");
+        assert_eq!(truncate("🤚a🤚", 6).unwrap().to_string(), "🤚a🤚");
+        assert_eq!(truncate("🤚a🤚", 7).unwrap().to_string(), "🤚a🤚");
+        assert_eq!(truncate("🤚a🤚", 8).unwrap().to_string(), "🤚a🤚");
         assert_eq!(truncate("🤚a🤚", 9).unwrap().to_string(), "🤚a🤚");
         assert_eq!(truncate("🤚a🤚", 10).unwrap().to_string(), "🤚a🤚");
     }
@@ -694,6 +701,10 @@ mod tests {
         assert_eq!(
             indent("hello\nfoo\n bar", 4).unwrap().to_string(),
             "hello\n    foo\n     bar"
+        );
+        assert_eq!(
+            indent("hello", 267_332_238_858).unwrap().to_string(),
+            "hello"
         );
     }
 
@@ -797,6 +808,10 @@ mod tests {
             center("foo bar", 8).unwrap().to_string(),
             "foo bar ".to_string()
         );
+        assert_eq!(
+            center("foo", 111_669_149_696).unwrap().to_string(),
+            "foo".to_string()
+        );
     }
 
     #[test]
@@ -818,5 +833,11 @@ mod tests {
         assert_eq!(&title("foo  bar ").unwrap(), "Foo  Bar ");
         assert_eq!(&title("fOO").unwrap(), "Foo");
         assert_eq!(&title("fOo BaR").unwrap(), "Foo Bar");
+    }
+
+    #[test]
+    fn fuzzed_indent_filter() {
+        let s = "hello\nfoo\nbar".to_string().repeat(1024);
+        assert_eq!(indent(s.clone(), 4).unwrap().to_string(), s);
     }
 }
