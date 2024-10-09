@@ -172,6 +172,7 @@ impl<'a> Expr<'a> {
         ))(i)
     }
 
+    // Keep in sync with `TWO_PLUS_CHAR_OPS`, below
     expr_prec_layer!(or, and, "||");
     expr_prec_layer!(and, compare, "&&");
     expr_prec_layer!(compare, bor, "==", "!=", ">=", ">", "<=", "<");
@@ -269,7 +270,7 @@ impl<'a> Expr<'a> {
                     separated_list0(char(','), ws(move |i| Self::parse(i, level))),
                     Self::Array,
                 ),
-                char(']'),
+                pair(opt(ws(char(','))), char(']')),
             )),
         )(i)
     }
@@ -430,3 +431,6 @@ impl<'a> Suffix<'a> {
         map(preceded(take_till(not_ws), char('?')), |_| Self::Try)(i)
     }
 }
+
+pub const TWO_PLUS_CHAR_OPS: &[&str] =
+    &["||", "&&", "==", "!=", ">=", "<=", "<<", ">>", "..", "..="];
